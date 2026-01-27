@@ -154,11 +154,20 @@ impl State {
     fn display(&self) {
         for a in 0..4 {
             for b in 0..4 {
-                print!("{:02x} ", self.array[b][a]);
+                print!("{:02x}", self.array[b][a]);
             }
             println!();
         }
         println!();
+    }
+
+    fn to_hex(&self) -> String {
+        let mut hex = String::new();
+        self.array.iter().for_each(|row| {
+            row.iter().for_each(|&x| {
+                hex.push_str(&format!("{:02x}", x));
+            })});
+        hex
     }
 
     fn hex_display(&self) {
@@ -221,7 +230,6 @@ impl Engine {
         expanded_key[4*pos] = self.expand_word(expanded_key[4*pos-1],expanded_key[4*(pos-1)],RCON[pos-1])?;
         //println!("\n{:x?}",expanded_key[4*pos]);
         for index in (4*pos+1)..(4*(pos+1)) {
-;
             expanded_key[index]=<[u8; 4]>::try_from(
                 expanded_key[index-1].iter()
                     .zip(expanded_key[index-4].iter())
@@ -457,12 +465,11 @@ impl Engine {
         let mut out = [0; 4];
         let mut index = 0;
         for row in inverse_table.iter() {
-            out[index] = (
+            out[index] =
                 self.g_mul(new[0], row[0]) ^
                     self.g_mul(new[1], row[1]) ^
                     self.g_mul(new[2], row[2]) ^
-                    self.g_mul(new[3], row[3])
-            );
+                    self.g_mul(new[3], row[3]);
             index += 1;
         };
         [out[0] as u8,out[1] as u8,out[2] as u8,out[3] as u8]
@@ -501,55 +508,68 @@ impl Engine {
     }
 }
 
-fn full_run() -> Result<()> {
-    let mut encrypt_engine = Engine::new(
-        hex::decode("7720534543524554204d455353414745")?,
-        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
-    encrypt_engine.encrypt()?.hex_display();
-    let mut decrypt_engine = Engine::new(
-        hex::decode("37a7ca1db8bb81566d391ca1f2cbce29")?,
-        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
 
-    decrypt_engine.decrypt()?.hex_display();
-    Ok(())
-}
+    #[test]
+    fn full_run() -> Result<()> {
+        let mut encrypt_engine = Engine::new(
+            hex::decode("7720534543524554204d455353414745")?,
+            hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+        let cypher_text = encrypt_engine.encrypt()?.to_hex();
+        let mut decrypt_engine = Engine::new(
+            hex::decode(cypher_text)?,
+            hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
 
-fn test_undo_mix_columns() -> Result<()> {
-    let mut eng = Engine::new(
-        hex::decode("7720534543524554204d455353414745")?,
-        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
-    eng.state.hex_display();
-    eng.mix_columns();
-    eng.unmix_columns();
-    eng.state.hex_display();
-    Ok(())
-}
+        let plain_text = decrypt_engine.decrypt()?.to_hex();
+        assert_eq!("7720534543524554204d455353414745", plain_text);
+        Ok(())
+    }
 
-fn test_undo_shift_rows() -> Result<()> {
-    let mut eng = Engine::new(
-        hex::decode("7720534543524554204d455353414745")?,
-        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
-    eng.state.hex_display();
-    eng.shift_rows();
-    eng.unshift_rows();
-    eng.state.hex_display();
-    Ok(())
-}
+    #[test]
+    fn test_undo_mix_columns() -> Result<()> {
+        let mut eng = Engine::new(
+            hex::decode("7720534543524554204d455353414745")?,
+            hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+        let before = eng.state.to_hex();
+        eng.mix_columns()?;
+        eng.unmix_columns()?;
+        let after = eng.state.to_hex();
+        assert_eq!(before, after);
+        Ok(())
+    }
 
-fn test_undo_sub_bytes() -> Result<()> {
-    let mut eng = Engine::new(
-        hex::decode("7720534543524554204d455353414745")?,
-        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
-    eng.state.hex_display();
-    eng.sub_bytes();
-    eng.unsub_bytes();
-    eng.state.hex_display();
-    Ok(())
+    #[test]
+    fn test_undo_shift_rows() -> Result<()> {
+        let mut eng = Engine::new(
+            hex::decode("7720534543524554204d455353414745")?,
+            hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+        let before = eng.state.hex_display();
+        eng.shift_rows()?;
+        eng.unshift_rows()?;
+        let after = eng.state.hex_display();
+        assert_eq!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn test_undo_sub_bytes() -> Result<()> {
+        let mut eng = Engine::new(
+            hex::decode("7720534543524554204d455353414745")?,
+            hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+        let before = eng.state.to_hex();
+        eng.sub_bytes()?;
+        eng.unsub_bytes()?;
+        let after = eng.state.to_hex();
+        assert_eq!(before, after);
+        Ok(())
+    }
+
 }
 
 fn main() -> Result<()> {
-    full_run()?;
-
     Ok(())
     // println!("{:x?}",);
 }
