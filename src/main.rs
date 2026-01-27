@@ -283,6 +283,7 @@ impl Engine {
     }
 
     fn undo_initial_round(&mut self) -> Result<()> {
+        self.round_key = self.key;
         self.add_round_key()?;
         Ok(())
     }
@@ -291,7 +292,6 @@ impl Engine {
         self.load_next_round_key()?;
         self.sub_bytes()?;
         self.shift_rows()?;
-        self.state.hex_display();
         self.mix_columns()?;
         self.add_round_key()?;
         Ok(())
@@ -301,7 +301,6 @@ impl Engine {
         self.load_last_round_key()?;
         self.add_round_key()?;
         self.unmix_columns()?;
-        self.state.hex_display();
         self.unshift_rows()?;
         self.unsub_bytes()?;
         Ok(())
@@ -324,39 +323,40 @@ impl Engine {
     }
 
     fn encrypt(&mut self) -> Result<State> {
-        println!("Start");
-        self.state.hex_display();
+        //println!("Start");
+        //self.state.hex_display();
         self.initial_round()?;
         for x in 0..9 {
-            println!("{}",x+1);
-            self.state.hex_display();
+            //println!("{}",x+1);
+            //self.state.hex_display();
             self.main_round()?
         }
-        println!("10");
-        self.state.hex_display();
+        //println!("10");
+        //self.state.hex_display();
         self.final_round()?;
-        println!("Final");
-        self.state.hex_display();
+        //println!("Final");
+        //self.state.hex_display();
         Ok(self.state)
     }
 
     fn decrypt(&mut self) -> Result<State> {
         self.round = 10;
-        println!("Final");
-        self.state.hex_display();
+        //println!("Final");
+        //self.state.hex_display();
 
         self.undo_final_round()?;
 
         for x in 0..9 {
-            println!("{}",10-x);
-            self.state.hex_display();
+            //println!("{}",10-x);
+            //self.state.hex_display();
             self.undo_main_round()?
         };
+        //println!("1");
+        //self.state.hex_display();
 
         self.undo_initial_round()?;
-        println!("Start");
-        self.state.hex_display();
-        //return Ok(self.state);
+        //println!("Start");
+        //self.state.hex_display();
         Ok(self.state)
     }
 
@@ -463,6 +463,7 @@ impl Engine {
                     self.g_mul(new[2], row[2]) ^
                     self.g_mul(new[3], row[3])
             );
+            index += 1;
         };
         [out[0] as u8,out[1] as u8,out[2] as u8,out[3] as u8]
     }
@@ -500,18 +501,54 @@ impl Engine {
     }
 }
 
-
-
-fn main() -> Result<()> {
+fn full_run() -> Result<()> {
     let mut encrypt_engine = Engine::new(
         hex::decode("7720534543524554204d455353414745")?,
         hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
-    encrypt_engine.encrypt()?;
+    encrypt_engine.encrypt()?.hex_display();
     let mut decrypt_engine = Engine::new(
         hex::decode("37a7ca1db8bb81566d391ca1f2cbce29")?,
         hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
 
-    decrypt_engine.decrypt()?;
+    decrypt_engine.decrypt()?.hex_display();
+    Ok(())
+}
+
+fn test_undo_mix_columns() -> Result<()> {
+    let mut eng = Engine::new(
+        hex::decode("7720534543524554204d455353414745")?,
+        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+    eng.state.hex_display();
+    eng.mix_columns();
+    eng.unmix_columns();
+    eng.state.hex_display();
+    Ok(())
+}
+
+fn test_undo_shift_rows() -> Result<()> {
+    let mut eng = Engine::new(
+        hex::decode("7720534543524554204d455353414745")?,
+        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+    eng.state.hex_display();
+    eng.shift_rows();
+    eng.unshift_rows();
+    eng.state.hex_display();
+    Ok(())
+}
+
+fn test_undo_sub_bytes() -> Result<()> {
+    let mut eng = Engine::new(
+        hex::decode("7720534543524554204d455353414745")?,
+        hex::decode("f758438e0e498759b4eb29ee61edd55a")?)?;
+    eng.state.hex_display();
+    eng.sub_bytes();
+    eng.unsub_bytes();
+    eng.state.hex_display();
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    full_run()?;
 
     Ok(())
     // println!("{:x?}",);
