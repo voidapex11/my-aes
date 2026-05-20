@@ -1,10 +1,20 @@
+use std::ops::BitXor;
 use anyhow::Result;
 
+#[derive(Debug, Copy, Clone)]
 enum Mode {
     None,
     Encrypt,
     Decrypt,
 }
+
+#[derive(Debug, Copy, Clone)]
+enum InputMode {
+    VecU8,
+    Hex,
+    Bytes
+}
+
 const RCON: [[u8; 4]; 10] = [
     [0x01, 0, 0, 0],
     [0x02, 0, 0, 0],
@@ -213,8 +223,30 @@ impl State {
     }
 }
 
+impl BitXor for State {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output {
+
+
+            Self::new(self.array
+                .iter()
+                .zip(rhs.array.iter())
+                .map(|(&x1, &x2)| {
+
+                        x1.iter()
+                            .zip(x2.iter())
+                            .map(|(&x1, &x2)| x1 ^ x2)
+                            .collect::<Vec<u8>>()
+
+                }).flatten().collect::<Vec<u8>>()).unwrap()
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Engine {
     state: State,
+    blocks: Vec<State>,
+    iv: State,
     key: State,
     mode: Mode,
     round: u8,
@@ -222,9 +254,18 @@ struct Engine {
     round_key: State,
 }
 
+trait Valid {}
+
+impl Valid for State {}
+impl Valid for Vec<u8> {}
+
 impl Engine {
-    pub fn new(state: Vec<u8>, key: Vec<u8>) -> Result<Self> {
-        let state = State::new(state)?;
+    pub fn new(state: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> Result<Self> {
+        let blocks = state.chunks(16)
+            .map(|chunk| State::new(chunk.to_vec()).unwrap())
+            .collect::<Vec<State>>();
+
+        let state = blocks[0];
         let key_state = State::new(key)?;
         let mut round_keys = [[0_u8; 4]; 48];
         (round_keys[..key_state.array.len()].copy_from_slice(&key_state.array[..])); //.try_into()?;
@@ -232,8 +273,10 @@ impl Engine {
         //let mut round_keys = key_state.array.clone().append([[0;4];44]) ;
         let mut engine = Engine {
             state,
+            blocks,
             key: key_state,
             mode: Mode::None,
+            iv: State::new(iv)?,
             round: 0,
             round_key: key_state,
             round_keys,
@@ -379,7 +422,53 @@ impl Engine {
         Ok(())
     }
 
-    fn encrypt(&mut self) -> Result<State> {
+    fn encrypt(&mut self) -> Result<()> {
+        let mut blocks = self.blocks.clone();
+        let mut old = self.iv;
+        for state in blocks.iter_mut() {
+            // priming
+            self.round = 0;
+            self.round_key = self.key;
+
+            // xor iv
+            *state = *state ^ old;
+            self.state = *state;
+
+            // encrypt
+            self.encrypt_block()?;
+
+            // store result and update iv
+            *state = self.state;
+            old = *state;
+        };
+        self.blocks = blocks;
+        Ok(())
+    }
+
+    fn decrypt(&mut self) -> Result<()> {
+        let mut blocks = self.blocks.clone();
+        let mut old = self.iv;
+
+        for state in blocks.iter_mut() {
+            // store old
+            let cyphertext = *state;
+
+            // setup for decrypt
+            self.round = 0;
+            self.round_key = self.key;
+            self.state = *state;
+            self.decrypt_block()?;
+
+            // store decrypted
+            *state = self.state ^ old;
+
+            old = cyphertext;
+        };
+        self.blocks = blocks;
+        Ok(())
+    }
+
+    fn encrypt_block(&mut self) -> Result<State> {
         //println!("Start");
         //self.state.hex_display();
         self.initial_round()?;
@@ -396,7 +485,7 @@ impl Engine {
         Ok(self.state)
     }
 
-    fn decrypt(&mut self) -> Result<State> {
+    fn decrypt_block(&mut self) -> Result<State> {
         self.round = 10;
         //println!("Final");
         //self.state.hex_display();
@@ -418,23 +507,7 @@ impl Engine {
     }
 
     fn add_round_key(&mut self) -> Result<()> {
-        self.state.array = <[[u8; 4]; 4]>::try_from(
-            self.state
-                .array
-                .iter()
-                .zip(self.round_key.array.iter())
-                .map(|(&x1, &x2)| {
-                    <[u8; 4]>::try_from(
-                        x1.iter()
-                            .zip(x2.iter())
-                            .map(|(&x1, &x2)| x1 ^ x2)
-                            .collect::<Vec<u8>>(),
-                    )
-                    .unwrap()
-                })
-                .collect::<Vec<[u8; 4]>>(),
-        )
-        .unwrap();
+        self.state = self.state^self.round_key;
         Ok(())
     }
 
@@ -580,6 +653,28 @@ impl Engine {
     }
 }
 
+fn pad(data: String) -> Result<String> {
+    let num = data.len()%16;
+    let mut result = data;
+    for i in 0..num {
+        result += format!("{:x}", num).as_str();
+    };
+    Ok(result)
+}
+fn unpad(data: String) -> Result<String> {
+    let length: usize = data.len()/16;
+    let z = i32::from_str_radix(
+        data.chars()
+            .last()
+            .expect("invalid hex")
+            .to_string()
+            .as_str(), 16)?;
+    if pad(data[0..(z as usize)].to_owned())? == data {
+        return Ok(data[0..(z as usize)].to_owned())
+    };
+    Ok(data)
+}
+
 #[cfg(test)]
 mod tests {
     // Note this useful idiom: importing names from outer (for mod tests) scope.
@@ -590,14 +685,17 @@ mod tests {
         let mut encrypt_engine = Engine::new(
             hex::decode("7720534543524554204d455353414745")?,
             hex::decode("f758438e0e498759b4eb29ee61edd55a")?,
+            hex::decode("00000000000000000000000000000000")?
         )?;
-        let cypher_text = encrypt_engine.encrypt()?.to_hex();
+        let cypher_text = encrypt_engine.encrypt_block()?.to_hex();
         let mut decrypt_engine = Engine::new(
-            hex::decode(cypher_text)?,
+            hex::decode(cypher_text.clone())?,
             hex::decode("f758438e0e498759b4eb29ee61edd55a")?,
+            hex::decode("00000000000000000000000000000000")?
         )?;
 
-        let plain_text = decrypt_engine.decrypt()?.to_hex();
+        let plain_text = decrypt_engine.decrypt_block()?.to_hex();
+        assert_eq!("37a7ca1db8bb81566d391ca1f2cbce29",cypher_text.clone());
         assert_eq!("7720534543524554204d455353414745", plain_text);
         Ok(())
     }
@@ -607,6 +705,7 @@ mod tests {
         let mut eng = Engine::new(
             hex::decode("7720534543524554204d455353414745")?,
             hex::decode("f758438e0e498759b4eb29ee61edd55a")?,
+            hex::decode("00000000000000000000000000000000")?
         )?;
         let before = eng.state.to_hex();
         eng.mix_columns()?;
@@ -621,6 +720,7 @@ mod tests {
         let mut eng = Engine::new(
             hex::decode("7720534543524554204d455353414745")?,
             hex::decode("f758438e0e498759b4eb29ee61edd55a")?,
+            hex::decode("00000000000000000000000000000000")?
         )?;
         let before = eng.state.hex_display();
         eng.shift_rows()?;
@@ -635,6 +735,7 @@ mod tests {
         let mut eng = Engine::new(
             hex::decode("7720534543524554204d455353414745")?,
             hex::decode("f758438e0e498759b4eb29ee61edd55a")?,
+            hex::decode("00000000000000000000000000000000")?
         )?;
         let before = eng.state.to_hex();
         eng.sub_bytes()?;
@@ -643,9 +744,38 @@ mod tests {
         assert_eq!(before, after);
         Ok(())
     }
+
+    #[test]
+    fn test_block_opperations() -> Result<()> {
+        let mut encrypt_engine = Engine::new(
+            hex::decode("7cfbae112b9e3140dd7d421b043b4fd318ae16ce8703fa7b0d053fe2edb6454e6d764b2b2c55706a76bc0110327190c3ca2e3c58da35cfb5f6dedb8b7de9c188")?,
+            hex::decode("5e006d11fd988dde90e481e85dfdf306")?,
+            hex::decode("15d7feca54c6409874c65fd631b66a79")?
+        )?;
+        encrypt_engine.encrypt()?;
+        let ciphertext = encrypt_engine.blocks.iter().map(|x|x.to_hex()).collect::<Vec<String>>().join("");;
+        assert_eq!(ciphertext,String::from("f40f3047f0e25ab7573d24f7eaddbd02ead355da191e8257dc8a62835931459e64e3061d37f3f185fd1e642866b4d64a53d91269b71ec6c61c2a7a7991634d82"));
+
+        Ok(())
+    }
 }
 
 fn main() -> Result<()> {
+    let mut encrypt_engine = Engine::new(
+        hex::decode("7cfbae112b9e3140dd7d421b043b4fd318ae16ce8703fa7b0d053fe2edb6454e6d764b2b2c55706a76bc0110327190c3ca2e3c58da35cfb5f6dedb8b7de9c188")?,
+        hex::decode("5e006d11fd988dde90e481e85dfdf306")?,
+        hex::decode("15d7feca54c6409874c65fd631b66a79")?
+    )?;
+    encrypt_engine.encrypt()?;
+    for block in encrypt_engine.clone().blocks {
+        print!("{}",block.to_hex());
+    };
+    println!();
+    encrypt_engine.decrypt()?;
+    for block in encrypt_engine.clone().blocks {
+        print!("{}",block.to_hex());
+    };
+    println!();
     Ok(())
     // println!("{:x?}",);
 }
